@@ -1,6 +1,7 @@
 # loud-cron
 
 [![Latest release](https://img.shields.io/github/v/release/WJDdidi-1/loud-cron?display_name=tag)](https://github.com/WJDdidi-1/loud-cron/releases/latest)
+[![CI](https://github.com/WJDdidi-1/loud-cron/actions/workflows/ci.yml/badge.svg)](https://github.com/WJDdidi-1/loud-cron/actions/workflows/ci.yml)
 
 Local cron runner with a durable run ledger that reports missed and hung jobs.
 It also validates cron job files before they reach a scheduler.
@@ -54,8 +55,11 @@ the expected-versus-actual run record local.
 
 ## Install
 
-The package is not published to npm yet. Install from a checkout with Node.js
-18 or newer:
+Requires Node.js 18 or newer. There are no runtime dependencies, so the install
+is one package with no dependency tree. The npm package is not published yet, so
+`npx loud-cron` is not available; install from a checkout or a packed tarball.
+
+From a checkout:
 
 ```sh
 git clone https://github.com/WJDdidi-1/loud-cron.git
@@ -64,15 +68,35 @@ npm install -g .
 loud-cron --version
 ```
 
-Or run it without a global install:
+`npm install -g .` links the `loud-cron` binary from `bin/loud-cron.mjs`. To try
+it without a global install, run the same file with Node:
 
 ```sh
 node ./bin/loud-cron.mjs --help
 ```
 
+To install a tarball built from a checkout:
+
+```sh
+npm pack
+npm install -g ./loud-cron-0.1.0.tgz
+```
+
+From the checkout root, verify the install before scheduling anything:
+
+```sh
+loud-cron --version          # 0.1.0
+loud-cron check examples/jobs.json
+```
+
+The check prints a JSON report and exits `0`; it parses the file but does not
+execute anything. Upgrade a checkout install with `npm install -g .` and remove
+it with `npm uninstall -g loud-cron`.
+
 The tagged source is also available as a zip or tarball from the
 [0.1.0 release page](https://github.com/WJDdidi-1/loud-cron/releases/tag/0.1.0).
-There are no runtime dependencies.
+That tag predates the runner, so install from `main` to use `run`, `tick`, and
+`doctor`.
 
 ## Quick start
 
@@ -103,6 +127,86 @@ loud-cron doctor jobs.json --json
 default, so it can stay in a container entrypoint or agent process. `tick` is
 the audit-only version: it records missed occurrences but never executes
 commands.
+
+## A real session
+
+The transcript below was captured from a real checkout in an empty directory
+using a two-job file: one job succeeds, one exits `3`. `TZ=UTC` makes the cron
+evaluation deterministic, and `--now` pins the scheduler clock so the session is
+reproducible; `startedAt` and `finishedAt` in the ledger are still real clock
+times. Durations vary between runs, and the machine-specific ledger path is
+shortened to `…`.
+
+```json
+{
+  "jobs": [
+    {
+      "id": "nightly-report",
+      "schedule": "0 2 * * *",
+      "command": "node -e \"console.log('report written')\"",
+      "timeout": "30s"
+    },
+    {
+      "id": "hourly-sync",
+      "schedule": "@hourly",
+      "command": "node -e \"console.error('sync failed'); process.exit(3)\"",
+      "timeout": "10s"
+    }
+  ]
+}
+```
+
+```console
+$ export TZ=UTC
+$ loud-cron --version
+0.1.0
+
+$ loud-cron check jobs.json
+{
+  "ok": true,
+  "file": "jobs.json",
+  "jobCount": 2,
+  "errors": []
+}
+
+$ loud-cron run jobs.json --once --now 2026-01-01T02:00:00Z
+[nightly-report] stdout:
+report written
+[hourly-sync] stderr:
+sync failed
+loud-cron run at 2026-01-01T02:00:00.000Z: 2 executed, 0 missed (ledger …/loud-cron-demo/.loud-cron/ledger.jsonl)
+  nightly-report 2026-01-01T02:00:00.000Z ok (66ms, exit 0)
+  hourly-sync 2026-01-01T02:00:00.000Z failed (exit 3)
+
+$ loud-cron doctor jobs.json --now 2026-01-01T02:00:00Z
+loud-cron doctor at 2026-01-01T02:00:00.000Z: needs attention (ledger …/loud-cron-demo/.loud-cron/ledger.jsonl)
+  failed_run: hourly-sync: command exited with code 3
+  nightly-report: ok
+  hourly-sync: failed
+$ echo $?
+1
+
+$ loud-cron tick jobs.json --now 2026-01-01T04:10:00Z
+loud-cron tick at 2026-01-01T04:10:00.000Z: 0 executed, 2 missed (ledger …/loud-cron-demo/.loud-cron/ledger.jsonl)
+  hourly-sync 2026-01-01T03:00:00.000Z missed
+  hourly-sync 2026-01-01T04:00:00.000Z missed
+
+$ loud-cron doctor jobs.json --now 2026-01-01T04:10:00Z
+loud-cron doctor at 2026-01-01T04:10:00.000Z: needs attention (ledger …/loud-cron-demo/.loud-cron/ledger.jsonl)
+  missed_run: hourly-sync: no ledger entry existed for this occurrence
+  nightly-report: ok
+  hourly-sync: missed
+$ echo $?
+1
+```
+
+The failing job did not stop the runner: `run` executed both jobs, recorded the
+failure, and exited `0` so the rest of the schedule still ran. `doctor` then
+exited `1`, which is what a cron wrapper or CI step should alert on. The
+simulated two-hour outage was not silent either: `tick` found the `03:00` and
+`04:00` occurrences missing from the ledger and wrote a `missed` record for
+each. Job output goes to stderr and may appear before or after the summary
+depending on buffering; `--json` keeps stdout machine-readable.
 
 ## Commands
 
@@ -273,6 +377,20 @@ While a job runs, an atomic lock file is held. A second attempt sees the live
 holder and records `overlap` rather than starting a duplicate. `doctor` also
 reports a lock held far past the job's timeout as `hung`.
 
+## Limitations and safety
+
+- The ledger and locks are files, so coordination is limited to one host and a
+  local filesystem. Do not point two machines at the same ledger.
+- A `missed` record is a report, not a queue. loud-cron does not replay missed
+  occurrences; only the newest due occurrence runs when it is within `--grace`.
+- Cron expressions are evaluated in the host's local time. There is no timezone
+  field, so run the process with the intended `TZ`.
+- There is no built-in notification channel. Use the exit status and
+  `--on-failure`, or consume the JSONL ledger.
+- The jobs file is executable configuration: commands run with the runner's
+  privileges and environment. Treat the file like code and keep it writable only
+  by trusted users.
+
 ## Runnable example
 
 [`examples/`](examples/) contains a valid job file, a deliberately broken one,
@@ -329,6 +447,13 @@ and `doctor` to see whether the expected runs actually happened.
 The newest occurrence runs if it is within `--grace`; older unrecorded
 occurrences are written as `missed`, so downtime produces a record instead of
 silence.
+
+**Does a missed run get executed later?**
+
+No. `missed` is a record, not a queue. After downtime, `run` executes the newest
+due occurrence only if it is within `--grace`; older occurrences stay recorded as
+missed. Replaying hours of hourly jobs at once is usually worse than knowing they
+did not run, so that decision is left to the operator.
 
 **What does `hung` mean?**
 
@@ -388,8 +513,11 @@ the code.
   and the `--on-failure` hook.
 - `test/loud-cron.test.mjs` checks version and help output.
 
-CI runs the suite on Linux, macOS, and Windows with Node 18, 20, and 22.
+CI runs the suite on Linux, macOS, and Windows with Node 18, 20, and 22. A
+separate packaging job builds the npm tarball, installs it globally into a clean
+prefix, and runs `loud-cron check` against the shipped example, so the install
+instructions above are exercised rather than only claimed.
 
 ## Licence
 
-Apache-2.0.
+Apache-2.0. The full text is in [`LICENSE`](LICENSE).

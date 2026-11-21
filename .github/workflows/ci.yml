@@ -7,6 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     strategy:
@@ -15,9 +22,41 @@ jobs:
         os: [ubuntu-latest, macos-15-intel, windows-latest]
         node: [18, 20, 22]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - name: install from the lockfile
+        run: npm ci --no-audit --no-fund
       - run: npm test
+
+  package:
+    name: pack and install the tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install from the lockfile
+        run: npm ci --no-audit --no-fund
+      - name: pack and install into a clean prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pack --pack-destination "$RUNNER_TEMP"
+          tarball="$(ls "$RUNNER_TEMP"/loud-cron-*.tgz)"
+          tar -tzf "$tarball" > "$RUNNER_TEMP/tarball-files.txt"
+          grep -q '^package/LICENSE$' "$RUNNER_TEMP/tarball-files.txt"
+          grep -q '^package/bin/loud-cron.mjs$' "$RUNNER_TEMP/tarball-files.txt"
+          if grep -Eq '^package/(test|\.github)/' "$RUNNER_TEMP/tarball-files.txt"; then
+            echo "the published tarball must not contain development files" >&2
+            exit 1
+          fi
+          prefix="$RUNNER_TEMP/prefix"
+          npm install --global --prefix "$prefix" "$tarball"
+          "$prefix/bin/loud-cron" --version
+          "$prefix/bin/loud-cron" check examples/jobs.json
