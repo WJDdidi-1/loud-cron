@@ -311,6 +311,9 @@ function runCommand(job, timeoutMs, killGraceMs) {
 
     let settled = false;
     let timedOut = false;
+    let escalated = false;
+    let pendingClose = null;
+    let pollTimer = null;
     let timeoutTimer = null;
     let killTimer = null;
     let escapeTimer = null;
@@ -321,6 +324,7 @@ function runCommand(job, timeoutMs, killGraceMs) {
       if (timeoutTimer !== null) clearTimeout(timeoutTimer);
       if (killTimer !== null) clearTimeout(killTimer);
       if (escapeTimer !== null) clearTimeout(escapeTimer);
+      if (pollTimer !== null) clearTimeout(pollTimer);
       resolve({
         code,
         signal,
@@ -332,14 +336,47 @@ function runCommand(job, timeoutMs, killGraceMs) {
       });
     };
 
+    // The direct child is the shell. On Linux `sh -c` may not exec a single
+    // command, so a job that traps SIGTERM keeps running in the process group
+    // after the shell itself has exited — waiting on the shell's "close" alone
+    // recorded SIGTERM while the runner had already escalated to SIGKILL
+    // (ubuntu and windows CI failed this way on 2026-11-22 while macOS passed).
+    const groupAlive = () => {
+      if (child.pid === undefined || process.platform === 'win32') return false;
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return error && error.code === 'EPERM';
+      }
+    };
+
+    const settleAfterClose = (code, signal) => {
+      if (!timedOut) {
+        finish(code, signal, null);
+        return;
+      }
+      pendingClose = { code, signal };
+      const check = () => {
+        if (settled) return;
+        if (!groupAlive()) {
+          finish(pendingClose.code, escalated ? 'SIGKILL' : pendingClose.signal, null);
+          return;
+        }
+        pollTimer = setTimeout(check, 25);
+      };
+      check();
+    };
+
     child.on('error', (error) => finish(null, null, error));
-    child.on('close', (code, signal) => finish(code, signal, null));
+    child.on('close', (code, signal) => settleAfterClose(code, signal));
 
     if (timeoutMs !== null && timeoutMs !== undefined && timeoutMs > 0) {
       timeoutTimer = setTimeout(() => {
         timedOut = true;
         terminateTree(child, 'SIGTERM');
         killTimer = setTimeout(() => {
+          escalated = true;
           terminateTree(child, 'SIGKILL');
           // A killed process should close immediately. This escape hatch
           // keeps the runner (and its report) moving if the OS disagrees.
