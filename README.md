@@ -155,6 +155,70 @@ and the exact output from checking each.
 Full field, cron-syntax, and error-code reference:
 [`docs/jobs-file.md`](docs/jobs-file.md).
 
+## FAQ
+
+**Does `loud-cron` run my jobs?**
+
+No. This commit implements `check` only: there is no `run`, scheduler loop, or
+run ledger yet, and `check` never executes a command. Running
+`node ./bin/loud-cron.mjs run examples/jobs.json` prints
+`unknown command "run"` and exits `2`. Keep using cron, systemd timers, or your
+platform scheduler to execute, and use `loud-cron check` to guard the
+definitions.
+
+**Why does `check` reject a six-field cron expression?**
+
+Seconds are not supported. `loud-cron` accepts the classic five fields (minute
+hour day-of-month month day-of-week) and rejects extra fields rather than
+silently dropping one. A six-field schedule fails with `cron_too_many_fields`;
+`node ./bin/loud-cron.mjs check examples/invalid-jobs.json` shows it alongside
+five other errors.
+
+**Why is a typo like `commnd` an error instead of a warning?**
+
+Because a silently ignored field is how a job ends up not doing what you meant.
+Unknown top-level and per-job fields fail with `unknown_field`; with `commnd`,
+the required `command` is also reported missing. The same example file shows
+both errors.
+
+**Does a passing check mean my jobs will run?**
+
+No. Exit `0` only means the file is well formed: every job has a unique ID, a
+valid five-field schedule, and a non-empty command. It does not prove the
+command exists, succeeds, or is scheduled by anything. `npm run check:example`
+shows a passing report.
+
+**How do I find the field that needs fixing?**
+
+Read the `path` in each error, such as `jobs[1].schedule`, plus the `jobId`
+when one was parsed. All problems in the file are returned in a single pass, so
+one `loud-cron check jobs.json` run lists everything it can find.
+
+**Is `--json` required?**
+
+No. JSON is already the default output for `check`; `--json` is accepted so
+scripts can be explicit about the contract. `loud-cron check jobs.json --json`
+and `loud-cron check jobs.json` produce the same report.
+
+**Can I run it in CI?**
+
+Yes. The exit status is the contract: `0` valid, `1` invalid or unreadable, `2`
+usage error. From a checkout without a global install,
+`node ./bin/loud-cron.mjs check jobs.json` fails the build on a bad definition.
+
+**Is it on npm?**
+
+Not yet. Install from a checkout with `npm install -g .`, then
+`loud-cron --version`. Until an npm package exists, `npx loud-cron` is not
+available; see [Install](#install).
+
+**Which cron syntax is unsupported?**
+
+`@reboot`, Quartz-style `?`/`L`/`W`/`#`, and seconds. Supported aliases are
+`@yearly`/`@annually`, `@monthly`, `@weekly`, `@daily`/`@midnight`, and
+`@hourly`. See [`docs/jobs-file.md`](docs/jobs-file.md) for the full syntax and
+error-code reference.
+
 ## Use it as a cron job-file linter in CI
 
 Run the check before deploying schedule changes, so a malformed job fails the
