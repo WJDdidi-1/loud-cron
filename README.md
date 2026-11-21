@@ -1,46 +1,171 @@
 # loud-cron
 
-Local cron runner with a durable run ledger that reports missed and hung jobs.
+Strict validation for cron job files: catch bad expressions, duplicate IDs,
+unknown fields, and missing commands before a scheduler silently drops a run.
 
-## Who it is for
-
-Developers who schedule jobs inside Node apps, agent frameworks, Docker containers, or macOS laptops, where systemd timers are unavailable and cron output goes unread.
+**Status: pre-runner MVP.** `check` is implemented and tested. `run`, the
+durable run ledger, missed/hung detection, and `doctor` are not built yet.
 
 ## The problem
 
-Schedulers silently skip, truncate, or never fire jobs: bad expressions, restarts, hung processes, and duplicate definitions drop runs with no error and no record, so the first signal is a user noticing missing work.
+Cron-style schedulers tend to fail quietly. A truncated expression, a duplicate
+job definition, a misspelled field, or a missing command can leave a job that
+never fires, and the first signal is usually a person noticing that work did not
+happen.
 
-## Why not the obvious answer
+`loud-cron check` makes the input loud: it parses the whole job file up front,
+reports every problem it can find in one pass as JSON with the path to fix, and
+exits non-zero. It is a cron expression parser and job-file validator you can
+run locally or in CI, not another scheduler daemon.
 
-cron+MAILTO, systemd timers, and healthchecks.io. MAILTO only mails job output, never reports runs that did not happen, and needs a working MTA; systemd's Persistent=/OnFailure=/TimeoutStartSec= covers Linux hosts but not macOS, containers, or in-process schedules, and cannot flag a timer that fired into a silent no-op; healthchecks.io needs an account, outbound network, and a ping added to every job. None strictly validate the job file or keep a local audit trail of expected versus actual runs.
+## Who it is for
+
+Developers who keep scheduled jobs in a JSON file inside Node apps, agent
+frameworks, Docker containers, or macOS laptops, and who want a bad definition
+to fail before deploy instead of becoming a run that never appears.
+
+## Why not just `crontab`?
+
+`crontab` validates very little. It accepts a line that is syntactically valid
+but wrong for your job, it does not understand a JSON job file, and it does not
+report duplicate job definitions or unknown fields. `loud-cron` is a pre-flight
+check for the definitions you already maintain; it is not a `crontab`
+replacement today.
 
 ## Install
 
+The package is not published to npm yet. Install it from a checkout with
+Node.js 18 or newer:
+
 ```sh
-npm install -g loud-cron
+git clone https://github.com/WJDdidi-1/loud-cron.git
+cd loud-cron
+npm install -g .
+loud-cron --version
+```
+
+Or run it without a global install:
+
+```sh
+node ./bin/loud-cron.mjs --help
 ```
 
 ## Use
 
 ```sh
-loud-cron --help
+loud-cron check jobs.json
 ```
 
-## What the MVP does
+A valid file prints a JSON report and exits `0`:
 
-- `loud-cron check jobs.json` rejects unparseable or truncated expressions, duplicate IDs, unknown fields, and missing commands with a non-zero exit and JSON errors.
-- `loud-cron run` executes due jobs through the shell and appends every attempt (scheduled time, start, duration, exit code, status) to an fsynced JSONL ledger.
-- On every tick and restart, reconciles scheduled occurrences against the ledger and records and reports `missed` runs instead of skipping them.
-- Per-job timeout (SIGTERM then SIGKILL) plus an atomic overlap lock, recording `timeout` and `overlap` as failures rather than silence.
-- `loud-cron doctor --json` exits 1 on any missed, failed, timed-out, or overdue job; `--on-failure <cmd>` runs a local hook.
+```json
+{
+  "ok": true,
+  "file": "jobs.json",
+  "jobCount": 3,
+  "errors": []
+}
+```
+
+A file with problems prints every error and exits `1`:
+
+```json
+{
+  "ok": false,
+  "file": "jobs.json",
+  "jobCount": 2,
+  "errors": [
+    {
+      "code": "cron_truncated",
+      "message": "cron expression has 4 fields; expected 5 (minute hour day-of-month month day-of-week)",
+      "path": "jobs[0].schedule",
+      "jobId": "nightly-report"
+    }
+  ]
+}
+```
+
+`--json` is accepted for scripts that want to be explicit; JSON is already the
+default for `check`. Usage mistakes exit `2` and print usage text to stderr.
+
+See [`examples/`](examples/) for a valid job file, a deliberately broken one,
+and the exact output from checking each.
+
+## What `check` does today
+
+- Parses classic five-field cron expressions (`minute hour day-of-month month
+  day-of-week`) including lists, ranges, steps, month and weekday names, and the
+  `@yearly`/`@monthly`/`@weekly`/`@daily`/`@hourly` aliases.
+- Rejects truncated or over-long expressions instead of guessing. Seconds are
+  not supported, so a six-field expression is an error.
+- Rejects out-of-range values, reversed ranges, bad steps, unknown aliases, and
+  extended syntax it does not implement.
+- Requires every job to have a non-empty, unique `id`, a schedule, and a
+  non-empty `command`.
+- Rejects unknown top-level and per-job fields, so a typo like `commnd` is
+  reported instead of silently ignored.
+- Validates the optional fields: `description`, `cwd`, `env`, `timeoutMs`,
+  `timeout`, `enabled`, `shell`, and `overlap`.
+- Reports all problems found in a single run with stable error codes and a
+  `path` such as `jobs[2].schedule`.
+- Exits `0` for a valid file, `1` for an invalid or unreadable file, and `2` for
+  a usage error.
+
+Full field, cron-syntax, and error-code reference:
+[`docs/jobs-file.md`](docs/jobs-file.md).
+
+## Use it as a cron job-file linter in CI
+
+Run the check before deploying schedule changes, so a malformed job fails the
+build instead of shipping:
+
+```sh
+loud-cron check jobs.json
+```
+
+Or, from a checkout without a global install:
+
+```sh
+node ./bin/loud-cron.mjs check jobs.json
+```
+
+The non-zero exit status is the contract CI needs; the JSON report gives the
+developer the file path and field to fix.
+
+## What is not built yet
+
+The remaining MVP milestones are not in this commit:
+
+- `loud-cron run` does not exist. No command from a jobs file is executed.
+- There is no scheduler loop or `tick`, so nothing runs on a schedule.
+- There is no durable run ledger, no reconciliation of missed runs, and no
+  reporting of hung jobs.
+- `timeout`, `timeoutMs`, `overlap`, `enabled`, and `shell` are validated as
+  fields but are not applied by a runner.
+- There is no `doctor` command, `--on-failure` hook, or notification channel.
+
+Those are planned, not current behavior. If you need a runner today, keep using
+cron, systemd timers, or your platform scheduler, and use `loud-cron check` to
+guard the job definitions before they get there.
 
 ## How we know it works
 
-`npm test` runs scripts/demo.sh in a temp dir: (1) a jobs file with a 6-field expression and a duplicate ID makes `check` exit 1 naming both; (2) `tick --now <T>` over a window with no ledger entries writes `missed` and `doctor --json` exits 1; (3) a `sleep 5` job with a 1s timeout run via `run --once` records `timeout` and `doctor` exits 1; (4) a fast job records `ok` and `doctor` exits 0.
+```sh
+npm test
+```
 
-## Status
+runs Node's built-in test runner (`node --test`) against the cron parser, the
+job-file validator, and the CLI. The suite currently has 22 tests, including
+end-to-end checks that a valid file exits `0`, that invalid JSON, truncated
+expressions, duplicate IDs, unknown fields, and missing commands exit `1` with
+the expected error codes, and that usage errors exit `2`. CI runs the suite on
+Linux, macOS, and Windows with Node 18, 20, and 22.
 
-Early MVP. The features above are the scope; anything not listed is not built yet.
+```sh
+npm run check:example
+```
+
+validates the example file and exits `0`.
 
 ## Licence
 
