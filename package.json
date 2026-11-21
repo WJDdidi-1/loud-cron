@@ -14,8 +14,9 @@
     "examples"
   ],
   "scripts": {
-    "test": "node --test",
-    "check:example": "node ./bin/loud-cron.mjs check ./examples/jobs.json"
+    "test": "node --test && node ./examples/preflight.mjs",
+    "check:example": "node ./bin/loud-cron.mjs check ./examples/jobs.json",
+    "demo": "node ./examples/preflight.mjs"
   },
   "keywords": [
     "cron",

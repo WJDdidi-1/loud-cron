@@ -10,6 +10,28 @@ Run them from this directory with the CLI checked out beside it:
 node ../bin/loud-cron.mjs check jobs.json
 ```
 
+## Run every case at once
+
+`preflight.mjs` is a zero-dependency, runnable example. It runs `check` against
+the valid file, the file with several problems, and a missing path, then
+compares each exit status and set of error codes with the documented contract.
+It exits `0` only if all three match, so it also shows the exit-code contract a
+CI job can rely on:
+
+```sh
+node preflight.mjs
+```
+
+From the repository root, `npm run demo` runs the same script. The output is the
+JSON report `check` prints for each case, followed by:
+
+```text
+All 3 examples matched the documented behavior.
+```
+
+`check` only parses and validates, so the demo never runs a command from the
+example job files.
+
 ## A valid file: `jobs.json`
 
 ```json
