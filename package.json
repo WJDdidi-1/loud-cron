@@ -1,20 +1,40 @@
 {
   "name": "loud-cron",
   "version": "0.1.0",
-  "description": "Local cron runner with a durable run ledger that reports missed and hung jobs.",
+  "description": "Strict cron job-file validator: rejects bad expressions, duplicate IDs, unknown fields and missing commands with JSON errors.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "loud-cron": "./bin/loud-cron.mjs"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "check:example": "node ./bin/loud-cron.mjs check ./examples/jobs.json"
   },
+  "keywords": [
+    "cron",
+    "crontab",
+    "cron-expression",
+    "cron-parser",
+    "cron-validator",
+    "cron-jobs",
+    "job-file",
+    "validation",
+    "json",
+    "cli",
+    "nodejs",
+    "devops",
+    "ci"
+  ],
   "engines": {
     "node": ">=18"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/WJDdidi-1/loud-cron.git"
-  }
+  },
+  "bugs": {
+    "url": "https://github.com/WJDdidi-1/loud-cron/issues"
+  },
+  "homepage": "https://github.com/WJDdidi-1/loud-cron#readme"
 }
