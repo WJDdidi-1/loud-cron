@@ -2,46 +2,60 @@
 
 [![Latest release](https://img.shields.io/github/v/release/WJDdidi-1/loud-cron?display_name=tag)](https://github.com/WJDdidi-1/loud-cron/releases/latest)
 
-Strict validation for cron job files: catch bad expressions, duplicate IDs,
-unknown fields, and missing commands before a scheduler silently drops a run.
+Local cron runner with a durable run ledger that reports missed and hung jobs.
+It also validates cron job files before they reach a scheduler.
 
-**Status: pre-runner MVP.** `check` is implemented and tested. `run`, the
-durable run ledger, missed/hung detection, and `doctor` are not built yet.
-
-**Latest release: [0.1.0](https://github.com/WJDdidi-1/loud-cron/releases/tag/0.1.0).**
-It contains the `check` validator only, and the npm package is not published
-yet. See the [0.1.0 release notes](docs/releases/0.1.0.md).
+**Status: MVP.** `check`, `run`, `tick`, and `doctor` are implemented and
+tested. The
+[latest tagged release, 0.1.0](https://github.com/WJDdidi-1/loud-cron/releases/tag/0.1.0),
+contains the `check` validator only; the runner and ledger are on `main` for the
+next release. The npm package is not published yet. See the
+[0.1.0 release notes](docs/releases/0.1.0.md).
 
 ## The problem
 
 Cron-style schedulers tend to fail quietly. A truncated expression, a duplicate
 job definition, a misspelled field, or a missing command can leave a job that
-never fires, and the first signal is usually a person noticing that work did not
-happen.
+never fires. Restarts drop occurrences, a hung process holds a lock forever, and
+the first signal is usually a person noticing that work did not happen.
 
-`loud-cron check` makes the input loud: it parses the whole job file up front,
-reports every problem it can find in one pass as JSON with the path to fix, and
-exits non-zero. It is a cron expression parser and job-file validator you can
-run locally or in CI, not another scheduler daemon.
+`loud-cron` makes those failures loud:
+
+- `check` validates the whole job file up front and reports every problem in
+  one pass as JSON, with the path to fix.
+- `run` executes due jobs through the shell and appends every attempt to an
+  fsynced JSONL ledger.
+- `tick` reconciles scheduled occurrences against that ledger and writes a
+  `missed` record instead of silently skipping one.
+- `doctor` reports missed, failed, timed-out, overlapped, overdue, and hung
+  jobs, and can run a local `--on-failure` hook.
+
+It is a local runner and a staging validator, not a hosted monitoring service.
 
 ## Who it is for
 
 Developers who keep scheduled jobs in a JSON file inside Node apps, agent
-frameworks, Docker containers, or macOS laptops, and who want a bad definition
-to fail before deploy instead of becoming a run that never appears.
+frameworks, Docker containers, or macOS laptops, and who want both a bad
+definition and a missing run to be visible without adding a hosted account.
 
 ## Why not just `crontab`?
 
 `crontab` validates very little. It accepts a line that is syntactically valid
 but wrong for your job, it does not understand a JSON job file, and it does not
-report duplicate job definitions or unknown fields. `loud-cron` is a pre-flight
-check for the definitions you already maintain; it is not a `crontab`
-replacement today.
+report duplicate job definitions or unknown fields. It also has no local record
+of an occurrence that never happened, so a restart or a bad expression is
+silent.
+
+`cron+MAILTO` only mails job output; it cannot report a run that did not
+happen. systemd timers cover Linux hosts but not macOS, containers, or
+in-process schedules. A hosted health-check service needs an account, outbound
+network, and a ping added to every job. `loud-cron` keeps the definitions and
+the expected-versus-actual run record local.
 
 ## Install
 
-The package is not published to npm yet. Install it from a checkout with
-Node.js 18 or newer:
+The package is not published to npm yet. Install from a checkout with Node.js
+18 or newer:
 
 ```sh
 git clone https://github.com/WJDdidi-1/loud-cron.git
@@ -58,32 +72,11 @@ node ./bin/loud-cron.mjs --help
 
 The tagged source is also available as a zip or tarball from the
 [0.1.0 release page](https://github.com/WJDdidi-1/loud-cron/releases/tag/0.1.0).
+There are no runtime dependencies.
 
-## Releases
+## Quick start
 
-- [`0.1.0`](https://github.com/WJDdidi-1/loud-cron/releases/tag/0.1.0)
-  (2026-11-22) — first tagged release; the `check` validator only, no npm
-  package yet. [Release notes](docs/releases/0.1.0.md).
-
-The release tag is the version to cite. There are no earlier releases.
-
-## Usage
-
-From a checkout, validate the example file that ships with the repository. It
-is valid, so the command exits `0`; `check` parses and reports but never runs a
-job's command:
-
-```sh
-npm run check:example
-```
-
-To check your own file, pass its path:
-
-```sh
-loud-cron check jobs.json
-```
-
-A minimal jobs file looks like this:
+Put schedules in `jobs.json`:
 
 ```json
 {
@@ -91,13 +84,38 @@ A minimal jobs file looks like this:
     {
       "id": "nightly-report",
       "schedule": "0 2 * * *",
-      "command": "node scripts/report.mjs"
+      "command": "node scripts/report.mjs",
+      "timeout": "5m"
     }
   ]
 }
 ```
 
-A valid file prints a JSON report and exits `0`:
+Validate the file, run one tick, then inspect health:
+
+```sh
+loud-cron check jobs.json
+loud-cron run jobs.json --once
+loud-cron doctor jobs.json --json
+```
+
+`run` without `--once` is the long-running runner. It ticks every 60 seconds by
+default, so it can stay in a container entrypoint or agent process. `tick` is
+the audit-only version: it records missed occurrences but never executes
+commands.
+
+## Commands
+
+### `loud-cron check <jobs.json>`
+
+Parses and validates a jobs file without running anything. Always prints JSON on
+stdout and exits 0 for a valid file, 1 for errors, 2 for usage errors.
+
+It rejects unparseable or truncated expressions, expressions that can never
+match a real date (such as `0 0 31 2 *`), duplicate IDs, unknown fields, and
+missing commands, reporting every problem it can find in one pass.
+
+A valid file prints:
 
 ```json
 {
@@ -127,65 +145,161 @@ A file with problems prints every error and exits `1`:
 ```
 
 `--json` is accepted for scripts that want to be explicit; JSON is already the
-default for `check`. Usage mistakes exit `2` and print usage text to stderr.
+default for `check`.
 
-See [`examples/`](examples/) for a valid job file, a deliberately broken one,
-and the exact output from checking each.
+### `loud-cron run [jobs.json]`
+
+Executes the newest due occurrence of every enabled job through the shell and
+appends every attempt to the ledger. Options:
+
+| Option | Meaning |
+| --- | --- |
+| `--once` | Perform one tick and exit instead of looping. |
+| `--now <time>` | Pretend the current time is `<time>` (parseable by `Date`). |
+| `--ledger <file>` | Ledger path. Default: `.loud-cron/ledger.jsonl` next to the jobs file. |
+| `--grace <duration>` | How late the newest due occurrence may be and still execute. Default `60s`. |
+| `--interval <duration>` | Loop interval for the long-running runner. Default `60s`. |
+| `--kill-grace <duration>` | Wait after SIGTERM before SIGKILL. Default `2s`. |
+| `--since <time>` | Ignore occurrences before this time when reconciling. |
+| `--json` | Print one machine-readable summary object per tick on stdout. |
+
+Job stdout/stderr is forwarded to stderr, so `--json` stdout remains parseable.
+`run` exits 0 once outcomes are recorded; a failing job is data for `doctor`,
+not a runner failure.
+
+### `loud-cron tick [jobs.json]`
+
+Reconciles scheduled occurrences against the ledger without executing anything.
+Every occurrence between the newest ledger entry for a job and `--now` that has
+no ledger entry becomes a `missed` record. With no ledger entry for a job, the
+most recent scheduled occurrence is reconciled. Supports `--now`, `--since`,
+`--ledger`, and `--json`.
+
+### `loud-cron doctor [jobs.json]`
+
+Prints a health report and exits 1 when any job needs attention. It reports:
+
+- the newest recorded attempt per job being `missed`, `failed`, `timeout`,
+  `overlap`, or `error`;
+- a scheduled occurrence newer than the newest ledger entry (an `overdue` job);
+- a live lock held longer than the job's timeout (one hour when no timeout is
+  configured) as a `hung` job;
+- a corrupt ledger.
+
+`--json` prints the report as JSON. `--on-failure <command>` runs a local shell
+hook when there are problems; the problems are passed as JSON in
+`LOUD_CRON_PROBLEMS`. The hook inherits the runner environment; its output goes
+to stderr so `--json` stdout stays parseable. It accepts `--now`, `--since`, and
+`--ledger` too.
+
+## Jobs file
+
+A jobs file is either an object with a `jobs` array (plus an optional `version`)
+or a bare array of job objects. Unknown fields are errors, not warnings, because
+silently ignoring a typo is how a scheduler does the wrong thing at 3am.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `id` | yes | Unique, non-empty job name. Used in the ledger and lock file. |
+| `schedule` / `cron` | yes | Classic five-field cron expression, evaluated in local time. Aliases such as `@daily` are supported. Set only one of the two names. |
+| `command` | yes | Shell command to execute. |
+| `description` | no | Human-readable note. |
+| `cwd` | no | Working directory for the command. Defaults to the runner's current directory. |
+| `env` | no | Object of extra environment variables (string values). Inherits the runner environment. |
+| `timeoutMs` / `timeout` | no | Positive milliseconds, or a duration such as `500ms`, `30s`, `5m`, `1h`, `1d`. |
+| `enabled` | no | Set `false` to leave a job in the file without scheduling it. |
+| `shell` | no | `true` (default), `false`, or a shell path. |
+| `overlap` | no | `skip` (default) holds an atomic per-job lock and records an overlap instead of running concurrently; `allow` permits concurrency. |
+
+Five fields are required in an expression: minute, hour, day-of-month, month,
+day-of-week. Seconds are deliberately rejected rather than guessed at. Day names
+(`MON-FRI`) and month names (`JAN`) are accepted. When both day-of-month and
+day-of-week are restricted, classic cron's OR rule applies.
+
+Full field, cron-syntax, and error-code reference:
+[`docs/jobs-file.md`](docs/jobs-file.md).
+
+## Run ledger
+
+Every attempt appends one JSON object per line to the ledger and fsyncs the file
+before continuing. The default path is `.loud-cron/ledger.jsonl` next to the
+jobs file; `--ledger` overrides it. A missing ledger simply means no attempt has
+been recorded yet.
+
+Example record:
+
+```json
+{"jobId":"nightly-report","scheduledFor":"2026-01-01T02:00:00.000Z","startedAt":"2026-01-01T02:00:00.412Z","finishedAt":"2026-01-01T02:00:03.901Z","durationMs":3489,"exitCode":0,"signal":null,"status":"ok","pid":4123,"attempt":1}
+```
+
+Statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `ok` | Command exited 0. |
+| `failed` | Command exited non-zero. |
+| `timeout` | Command exceeded its timeout and was terminated. |
+| `overlap` | The job's lock was held by a live process, so this attempt did not run. |
+| `missed` | A scheduled occurrence had no attempt, so it was reconciled as missed. |
+| `error` | The command could not be started. |
+
+Execution records are appended while the job lock is held, so a concurrent
+runner cannot duplicate the same occurrence. A malformed ledger line is reported
+as `ledger_corrupt`; `run` and `tick` refuse to append to it rather than
+compounding the damage. Locks live in `.loud-cron/locks/` next to the ledger and
+stale locks from dead processes are reclaimed.
+
+## Missed runs and restarts
+
+For each job, loud-cron finds the newest ledger entry and looks for scheduled
+occurrences after it. The newest occurrence executes only when it is no later
+than `--grace`; anything older is written as `missed`, so a restart after
+downtime produces a record instead of silence. If a job has no ledger entries at
+all, `run` executes its most recent scheduled occurrence once (a first-run
+catch-up) and `tick` records that occurrence as missed; a fresh install neither
+invents a lifetime of missed runs nor silently drops the latest due run. Use
+`--since` to bound reconciliation explicitly. A single reconcile pass handles at
+most 10,000 occurrences; after a very long outage, run `tick` or `run` again to
+continue from the newest ledger record.
+
+## Timeouts, overlap and hung jobs
+
+A job with `timeout`/`timeoutMs` receives SIGTERM when it runs too long, then
+SIGKILL after `--kill-grace`. On Windows the process tree is ended with
+`taskkill /T /F`. The attempt is recorded as `timeout` even if the command
+ignores SIGTERM.
+
+While a job runs, an atomic lock file is held. A second attempt sees the live
+holder and records `overlap` rather than starting a duplicate. `doctor` also
+reports a lock held far past the job's timeout as `hung`.
 
 ## Runnable example
 
+[`examples/`](examples/) contains a valid job file, a deliberately broken one,
+and the exact output from checking each.
 [`examples/preflight.mjs`](examples/preflight.mjs) runs `check` against the
-valid example, the deliberately broken example, and a missing path, then
-asserts that each exit status and set of error codes matches the contract
-documented above. It is one dependency-free Node script:
+valid example, the broken example, and a missing path, then asserts that each
+exit status and set of error codes matches the contract documented above:
 
 ```sh
 npm run demo
 ```
 
-It prints the JSON report for each case and ends with:
-
-```text
-All 3 examples matched the documented behavior.
-```
-
 The script exits non-zero if the behavior it checks and the documented contract
 ever diverge. It never executes a job command; `check` only parses and
-validates.
+validates. To validate the shipped example from a checkout:
 
-## What `check` does today
-
-- Parses classic five-field cron expressions (`minute hour day-of-month month
-  day-of-week`) including lists, ranges, steps, month and weekday names, and the
-  `@yearly`/`@monthly`/`@weekly`/`@daily`/`@hourly` aliases.
-- Rejects truncated or over-long expressions instead of guessing. Seconds are
-  not supported, so a six-field expression is an error.
-- Rejects out-of-range values, reversed ranges, bad steps, unknown aliases, and
-  extended syntax it does not implement.
-- Requires every job to have a non-empty, unique `id`, a schedule, and a
-  non-empty `command`.
-- Rejects unknown top-level and per-job fields, so a typo like `commnd` is
-  reported instead of silently ignored.
-- Validates the optional fields: `description`, `cwd`, `env`, `timeoutMs`,
-  `timeout`, `enabled`, `shell`, and `overlap`.
-- Reports all problems found in a single run with stable error codes and a
-  `path` such as `jobs[2].schedule`.
-- Exits `0` for a valid file, `1` for an invalid or unreadable file, and `2` for
-  a usage error.
-
-Full field, cron-syntax, and error-code reference:
-[`docs/jobs-file.md`](docs/jobs-file.md).
+```sh
+npm run check:example
+```
 
 ## FAQ
 
 **Does `loud-cron` run my jobs?**
 
-No. This commit implements `check` only: there is no `run`, scheduler loop, or
-run ledger yet, and `check` never executes a command. Running
-`node ./bin/loud-cron.mjs run examples/jobs.json` prints
-`unknown command "run"` and exits `2`. Keep using cron, systemd timers, or your
-platform scheduler to execute, and use `loud-cron check` to guard the
-definitions.
+Yes, with `loud-cron run`. `check` never executes a command; it only parses and
+validates the file. `run` executes the newest due occurrence of each enabled
+job and records every attempt in the ledger.
 
 **Why does `check` reject a six-field cron expression?**
 
@@ -206,26 +320,40 @@ both errors.
 
 No. Exit `0` only means the file is well formed: every job has a unique ID, a
 valid five-field schedule, and a non-empty command. It does not prove the
-command exists, succeeds, or is scheduled by anything. `npm run check:example`
-shows a passing report.
+command exists, succeeds, or is scheduled by anything. Use `run` for execution
+and `doctor` to see whether the expected runs actually happened.
+
+**What happens when the runner is down and comes back?**
+
+`run` and `tick` reconcile scheduled occurrences after the newest ledger entry.
+The newest occurrence runs if it is within `--grace`; older unrecorded
+occurrences are written as `missed`, so downtime produces a record instead of
+silence.
+
+**What does `hung` mean?**
+
+A job holds an atomic lock while it runs. If a lock is still held long past the
+job's timeout (one hour when no timeout is configured), `doctor` reports the job
+as `hung` rather than waiting forever for an attempt that may never finish.
 
 **How do I find the field that needs fixing?**
 
-Read the `path` in each error, such as `jobs[1].schedule`, plus the `jobId`
-when one was parsed. All problems in the file are returned in a single pass, so
-one `loud-cron check jobs.json` run lists everything it can find.
+Read the `path` in each error, such as `jobs[1].schedule`, plus the `jobId` when
+one was parsed. All problems in the file are returned in a single pass, so one
+`loud-cron check jobs.json` run lists everything it can find.
 
 **Is `--json` required?**
 
 No. JSON is already the default output for `check`; `--json` is accepted so
-scripts can be explicit about the contract. `loud-cron check jobs.json --json`
-and `loud-cron check jobs.json` produce the same report.
+scripts can be explicit about the contract. For `run`, `tick`, and `doctor`,
+`--json` makes stdout machine-readable while job output stays on stderr.
 
 **Can I run it in CI?**
 
-Yes. The exit status is the contract: `0` valid, `1` invalid or unreadable, `2`
-usage error. From a checkout without a global install,
+Yes. The exit status is the contract: `check` exits `0` valid, `1` invalid or
+unreadable, `2` usage error. From a checkout without a global install,
 `node ./bin/loud-cron.mjs check jobs.json` fails the build on a bad definition.
+Use `doctor` in a scheduled job to alert on missed or hung runs.
 
 **Is it on npm?**
 
@@ -240,67 +368,27 @@ available; see [Install](#install).
 `@hourly`. See [`docs/jobs-file.md`](docs/jobs-file.md) for the full syntax and
 error-code reference.
 
-## Use it as a cron job-file linter in CI
-
-Run the check before deploying schedule changes, so a malformed job fails the
-build instead of shipping:
-
-```sh
-loud-cron check jobs.json
-```
-
-Or, from a checkout without a global install:
-
-```sh
-node ./bin/loud-cron.mjs check jobs.json
-```
-
-The non-zero exit status is the contract CI needs; the JSON report gives the
-developer the file path and field to fix.
-
-## What is not built yet
-
-The remaining MVP milestones are not in this commit:
-
-- `loud-cron run` does not exist. No command from a jobs file is executed.
-- There is no scheduler loop or `tick`, so nothing runs on a schedule.
-- There is no durable run ledger, no reconciliation of missed runs, and no
-  reporting of hung jobs.
-- `timeout`, `timeoutMs`, `overlap`, `enabled`, and `shell` are validated as
-  fields but are not applied by a runner.
-- There is no `doctor` command, `--on-failure` hook, or notification channel.
-
-Those are planned, not current behavior. If you need a runner today, keep using
-cron, systemd timers, or your platform scheduler, and use `loud-cron check` to
-guard the job definitions before they get there.
-
 ## How we know it works
 
-```sh
-npm test
-```
+`npm test` runs the `node:test` suite and then the runnable example. It spawns
+the real CLI and real shell jobs; there is no demo script that can drift from
+the code.
 
-runs Node's built-in test runner (`node --test`) against the cron parser, the
-job-file validator, and the CLI, then runs the runnable example
-(`examples/preflight.mjs`). The suite currently has 22 tests, including
-end-to-end checks that a valid file exits `0`, that invalid JSON, truncated
-expressions, duplicate IDs, unknown fields, and missing commands exit `1` with
-the expected error codes, and that usage errors exit `2`. CI runs the suite on
-Linux, macOS, and Windows with Node 18, 20, and 22.
+- `test/check.test.mjs` validates the jobs file contract, including
+  unparseable, truncated, never-matching and duplicate definitions.
+- `test/cron.test.mjs` covers field parsing, day-of-month/day-of-week semantics,
+  aliases and occurrence math.
+- `test/run.test.mjs` executes real jobs and checks the appended ledger records,
+  tick reconciliation, restart/missed behavior, first-install catch-up,
+  cwd/env/shell handling, timeout (SIGTERM then SIGKILL and numeric
+  `timeoutMs`), start errors, live/stale/`allow` overlap locks, invalid-file
+  refusal, corrupt-ledger refusal, and clean `--json` output.
+- `test/doctor.test.mjs` checks healthy/invalid reports, overdue jobs, the
+  `--since` window, newest-record recovery, configured and default hung locks,
+  and the `--on-failure` hook.
+- `test/loud-cron.test.mjs` checks version and help output.
 
-```sh
-npm run check:example
-```
-
-validates the example file and exits `0`.
-
-```sh
-npm run demo
-```
-
-runs [`examples/preflight.mjs`](examples/preflight.mjs), which checks the valid,
-broken, and missing-file examples and exits `0` only when the reported exit
-statuses and error codes match the documented contract.
+CI runs the suite on Linux, macOS, and Windows with Node 18, 20, and 22.
 
 ## Licence
 

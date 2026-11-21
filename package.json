@@ -1,7 +1,7 @@
 {
   "name": "loud-cron",
   "version": "0.1.0",
-  "description": "Strict cron job-file validator: rejects bad expressions, duplicate IDs, unknown fields and missing commands with JSON errors.",
+  "description": "Local cron runner with a durable run ledger that reports missed and hung jobs, plus strict job-file validation.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {

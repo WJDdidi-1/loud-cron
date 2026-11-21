@@ -7,6 +7,7 @@
 // wrong thing at 3am.
 
 import { validateCronExpression } from './cron.mjs';
+import { parseDurationMs } from './duration.mjs';
 
 export const TOP_LEVEL_FIELDS = new Set(['version', 'jobs']);
 
@@ -93,11 +94,10 @@ function validateTimeout(value, errors, path, { millisecondsOnly = false } = {})
     return;
   }
 
-  const match =
-    typeof value === 'string'
-      ? /^(\d+(?:\.\d+)?)\s*(?:ms|s|m|h|d)$/i.exec(value.trim())
-      : null;
-  if (match === null || Number(match[1]) <= 0) {
+  // Use the same parser the runner uses so an accepted timeout is always one
+  // the runner can enforce; a value that rounds to zero or overflows is an
+  // error rather than a silently disabled timeout.
+  if (parseDurationMs(value) === null) {
     errors.push(
       issue(
         'invalid_field',

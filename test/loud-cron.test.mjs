@@ -14,3 +14,10 @@ test('--help names the tool and its MVP', () => {
   const out = execFileSync(process.execPath, [bin, '--help'], { encoding: 'utf8' });
   if (!out.includes('loud-cron')) throw new Error('help does not name the tool');
 });
+
+test('--help documents check, run, tick and doctor', () => {
+  const out = execFileSync(process.execPath, [bin, '--help'], { encoding: 'utf8' });
+  for (const command of ['check', 'run', 'tick', 'doctor', '--on-failure', '--once']) {
+    if (!out.includes(command)) throw new Error(`help does not mention ${command}`);
+  }
+});

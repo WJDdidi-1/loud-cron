@@ -200,9 +200,10 @@ exist, succeed, or are scheduled by anything.
 | `cron_invalid` | A field is empty, has an empty list item, or matches no values |
 | `cron_invalid_type` | The parser was given a non-string (not reachable from a jobs file, which rejects non-strings first) |
 
-## What this does not do yet
+## Validation versus execution
 
-The current MVP implements `check` only. There is no `run`, `tick`, daemon
-loop, durable ledger, missed-run reconciliation, timeout enforcement, overlap
-lock, or `doctor` command yet; those are the remaining milestones, not current
-features. `check` never executes a command from the file.
+`check` only parses and validates; it never executes a command from the file.
+Execution, the durable ledger, missed-run reconciliation, timeout enforcement,
+overlap locks, and health reporting are separate commands: `run`, `tick`, and
+`doctor`. See the [README](../README.md#commands) for those commands and the
+ledger record format.
