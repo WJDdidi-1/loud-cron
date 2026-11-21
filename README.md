@@ -1,10 +1,16 @@
 # loud-cron
 
+[![Latest release](https://img.shields.io/github/v/release/WJDdidi-1/loud-cron?display_name=tag)](https://github.com/WJDdidi-1/loud-cron/releases/latest)
+
 Strict validation for cron job files: catch bad expressions, duplicate IDs,
 unknown fields, and missing commands before a scheduler silently drops a run.
 
 **Status: pre-runner MVP.** `check` is implemented and tested. `run`, the
 durable run ledger, missed/hung detection, and `doctor` are not built yet.
+
+**Latest release: [0.1.0](https://github.com/WJDdidi-1/loud-cron/releases/tag/0.1.0).**
+It contains the `check` validator only, and the npm package is not published
+yet. See the [0.1.0 release notes](docs/releases/0.1.0.md).
 
 ## The problem
 
@@ -49,6 +55,17 @@ Or run it without a global install:
 ```sh
 node ./bin/loud-cron.mjs --help
 ```
+
+The tagged source is also available as a zip or tarball from the
+[0.1.0 release page](https://github.com/WJDdidi-1/loud-cron/releases/tag/0.1.0).
+
+## Releases
+
+- [`0.1.0`](https://github.com/WJDdidi-1/loud-cron/releases/tag/0.1.0)
+  (2026-11-22) — first tagged release; the `check` validator only, no npm
+  package yet. [Release notes](docs/releases/0.1.0.md).
+
+The release tag is the version to cite. There are no earlier releases.
 
 ## Usage
 
