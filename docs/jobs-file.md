@@ -118,6 +118,11 @@ loud-cron --version
 `--json` is accepted for scripts that want to be explicit about the output
 contract. JSON is already the default for `check`.
 
+For a runnable demonstration of the rules on this page, run `npm run demo` from
+the repository root (or `node examples/preflight.mjs`). It checks the two
+example job files plus a missing path and verifies the exit status and error
+codes; it never executes a job command.
+
 For a readable jobs file, `check` always writes a JSON report to stdout:
 
 ```json

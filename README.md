@@ -132,6 +132,27 @@ default for `check`. Usage mistakes exit `2` and print usage text to stderr.
 See [`examples/`](examples/) for a valid job file, a deliberately broken one,
 and the exact output from checking each.
 
+## Runnable example
+
+[`examples/preflight.mjs`](examples/preflight.mjs) runs `check` against the
+valid example, the deliberately broken example, and a missing path, then
+asserts that each exit status and set of error codes matches the contract
+documented above. It is one dependency-free Node script:
+
+```sh
+npm run demo
+```
+
+It prints the JSON report for each case and ends with:
+
+```text
+All 3 examples matched the documented behavior.
+```
+
+The script exits non-zero if the behavior it checks and the documented contract
+ever diverge. It never executes a job command; `check` only parses and
+validates.
+
 ## What `check` does today
 
 - Parses classic five-field cron expressions (`minute hour day-of-month month
@@ -260,7 +281,8 @@ npm test
 ```
 
 runs Node's built-in test runner (`node --test`) against the cron parser, the
-job-file validator, and the CLI. The suite currently has 22 tests, including
+job-file validator, and the CLI, then runs the runnable example
+(`examples/preflight.mjs`). The suite currently has 22 tests, including
 end-to-end checks that a valid file exits `0`, that invalid JSON, truncated
 expressions, duplicate IDs, unknown fields, and missing commands exit `1` with
 the expected error codes, and that usage errors exit `2`. CI runs the suite on
@@ -271,6 +293,14 @@ npm run check:example
 ```
 
 validates the example file and exits `0`.
+
+```sh
+npm run demo
+```
+
+runs [`examples/preflight.mjs`](examples/preflight.mjs), which checks the valid,
+broken, and missing-file examples and exits `0` only when the reported exit
+statuses and error codes match the documented contract.
 
 ## Licence
 
