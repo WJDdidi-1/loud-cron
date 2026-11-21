@@ -1,0 +1,24 @@
+{
+  "jobs": [
+    {
+      "id": "nightly-report",
+      "schedule": "0 2 * * *",
+      "command": "node scripts/report.mjs"
+    },
+    {
+      "id": "nightly-report",
+      "schedule": "0 2 * *",
+      "command": "node scripts/report.mjs"
+    },
+    {
+      "id": "retry-sync",
+      "schedule": "*/0 * * * *",
+      "commnd": "node scripts/sync.mjs"
+    },
+    {
+      "id": "six-fields",
+      "schedule": "0 0 2 * * *",
+      "command": "node scripts/report.mjs"
+    }
+  ]
+}

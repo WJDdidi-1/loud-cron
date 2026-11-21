@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "nightly-report",
+      "schedule": "0 2 * * *",
+      "command": "node scripts/report.mjs",
+      "description": "Build the nightly report",
+      "timeout": "5m"
+    },
+    {
+      "id": "weekday-digest",
+      "schedule": "30 8 * * MON-FRI",
+      "command": "node scripts/digest.mjs",
+      "description": "Email the weekday digest at 08:30",
+      "env": {
+        "NODE_ENV": "production"
+      },
+      "timeoutMs": 120000
+    },
+    {
+      "id": "hourly-sync",
+      "cron": "@hourly",
+      "command": "node scripts/sync.mjs",
+      "description": "Sync every hour",
+      "cwd": "./scripts",
+      "overlap": "skip",
+      "enabled": true
+    }
+  ]
+}
