@@ -50,10 +50,34 @@ Or run it without a global install:
 node ./bin/loud-cron.mjs --help
 ```
 
-## Use
+## Usage
+
+From a checkout, validate the example file that ships with the repository. It
+is valid, so the command exits `0`; `check` parses and reports but never runs a
+job's command:
+
+```sh
+npm run check:example
+```
+
+To check your own file, pass its path:
 
 ```sh
 loud-cron check jobs.json
+```
+
+A minimal jobs file looks like this:
+
+```json
+{
+  "jobs": [
+    {
+      "id": "nightly-report",
+      "schedule": "0 2 * * *",
+      "command": "node scripts/report.mjs"
+    }
+  ]
+}
 ```
 
 A valid file prints a JSON report and exits `0`:
@@ -62,7 +86,7 @@ A valid file prints a JSON report and exits `0`:
 {
   "ok": true,
   "file": "jobs.json",
-  "jobCount": 3,
+  "jobCount": 1,
   "errors": []
 }
 ```
