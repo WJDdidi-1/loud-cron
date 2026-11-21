@@ -369,9 +369,11 @@ continue from the newest ledger record.
 ## Timeouts, overlap and hung jobs
 
 A job with `timeout`/`timeoutMs` receives SIGTERM when it runs too long, then
-SIGKILL after `--kill-grace`. On Windows the process tree is ended with
-`taskkill /T /F`. The attempt is recorded as `timeout` even if the command
-ignores SIGTERM.
+SIGKILL after `--kill-grace`. On POSIX the runner waits for the whole process
+group, so a shell that exits on SIGTERM cannot leave a descendant running and
+have the attempt recorded before the descendant is gone. On Windows the process
+tree is ended with `taskkill /T /F`. The attempt is recorded as `timeout` even
+if the command ignores SIGTERM.
 
 While a job runs, an atomic lock file is held. A second attempt sees the live
 holder and records `overlap` rather than starting a duplicate. `doctor` also
@@ -505,8 +507,9 @@ the code.
   aliases and occurrence math.
 - `test/run.test.mjs` executes real jobs and checks the appended ledger records,
   tick reconciliation, restart/missed behavior, first-install catch-up,
-  cwd/env/shell handling, timeout (SIGTERM then SIGKILL and numeric
-  `timeoutMs`), start errors, live/stale/`allow` overlap locks, invalid-file
+  cwd/env/shell handling, timeout (SIGTERM then SIGKILL, descendants that
+  outlive the shell, and numeric `timeoutMs`), start errors,
+  live/stale/`allow` overlap locks, invalid-file
   refusal, corrupt-ledger refusal, and clean `--json` output.
 - `test/doctor.test.mjs` checks healthy/invalid reports, overdue jobs, the
   `--since` window, newest-record recovery, configured and default hung locks,

@@ -410,6 +410,72 @@ test(
   },
 );
 
+test(
+  'a timeout waits for shell descendants that outlive the shell before recording SIGKILL',
+  { skip: process.platform === 'win32' ? 'POSIX process groups are used on Unix only' : false },
+  () => {
+    const workspace = makeWorkspace([]);
+    try {
+      // The direct child is the shell. It exits as soon as SIGTERM arrives, but
+      // its background child ignores SIGTERM. The runner must wait for the
+      // process group, then record the escalation to SIGKILL instead of
+      // reporting the shell's SIGTERM and leaving the descendant running.
+      const script = path.join(workspace.directory, 'stubborn-tree.sh');
+      writeFileSync(
+        script,
+        [
+          '#!/bin/sh',
+          "trap 'exit 0' TERM",
+          "sh -c 'trap \"\" TERM; sleep 10' &",
+          'wait',
+          '',
+        ].join('\n'),
+      );
+      chmodSync(script, 0o755);
+      writeFileSync(
+        workspace.jobsFile,
+        JSON.stringify(
+          {
+            jobs: [
+              {
+                id: 'stubborn-tree',
+                schedule: '* * * * *',
+                command: `sh "${script}"`,
+                timeout: '200ms',
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+      );
+
+      const result = runCli([
+        'run',
+        workspace.jobsFile,
+        '--once',
+        '--now',
+        T0,
+        '--kill-grace',
+        '300ms',
+        '--ledger',
+        workspace.ledger,
+        '--json',
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      const [record] = readLedger(workspace.ledger);
+      assert.equal(record.status, 'timeout');
+      assert.equal(record.exitCode, null);
+      assert.equal(record.signal, 'SIGKILL');
+      // Resolving when the shell closed would finish at roughly the 200ms
+      // timeout; waiting for the group adds the kill grace and the poll.
+      assert.ok(record.durationMs >= 450, `duration was ${record.durationMs}ms`);
+    } finally {
+      workspace.cleanup();
+    }
+  },
+);
+
 test('a live overlap lock records overlap and leaves the running job alone', () => {
   const workspace = makeWorkspace([]);
   try {
