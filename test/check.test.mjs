@@ -240,6 +240,42 @@ test('check rejects invalid optional fields and schedule aliases that conflict',
   ]);
 });
 
+test('check rejects timeout durations the runner could not enforce', () => {
+  const rejected = check({
+    jobs: [
+      {
+        id: 'tiny',
+        schedule: '0 * * * *',
+        command: 'echo tiny',
+        timeout: '0.1ms',
+      },
+      {
+        id: 'overflow',
+        schedule: '0 * * * *',
+        command: 'echo overflow',
+        timeout: '999999999999999999999d',
+      },
+    ],
+  });
+
+  assert.equal(rejected.status, 1);
+  assert.deepEqual(codes(rejected.json), ['invalid_field', 'invalid_field']);
+
+  // A fractional duration that still rounds to a positive millisecond is fine.
+  const accepted = check({
+    jobs: [
+      {
+        id: 'half',
+        schedule: '0 * * * *',
+        command: 'echo half',
+        timeout: '0.5ms',
+      },
+    ],
+  });
+  assert.equal(accepted.status, 0);
+  assert.deepEqual(accepted.json.errors, []);
+});
+
 test('check enforces the top-level document shape', () => {
   const empty = check('[]');
   assert.equal(empty.status, 0);
@@ -300,4 +336,14 @@ test('check usage errors exit 2', () => {
 
   assert.equal(result.status, 2);
   assert.match(result.stderr, /exactly one jobs file/);
+});
+
+test('check rejects a cron expression that can never match a real date', () => {
+  const result = check({
+    jobs: [{ id: 'never', schedule: '0 0 31 2 *', command: 'echo never' }],
+  });
+
+  assert.equal(result.status, 1);
+  assert.deepEqual(codes(result.json), ['cron_never_matches']);
+  assert.equal(result.json.errors[0].path, 'jobs[0].schedule');
 });

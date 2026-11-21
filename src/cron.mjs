@@ -255,6 +255,10 @@ export function parseCronExpression(input) {
     dayOfMonth: undefined,
     month: undefined,
     dayOfWeek: undefined,
+    // Classic cron ORs day-of-month and day-of-week when both are restricted.
+    // A leading "*" means the field is unrestricted even if it has a step.
+    dayOfMonthRestricted: !fields[2].startsWith('*'),
+    dayOfWeekRestricted: !fields[4].startsWith('*'),
   };
   const keys = ['minute', 'hour', 'dayOfMonth', 'month', 'dayOfWeek'];
 
@@ -262,7 +266,171 @@ export function parseCronExpression(input) {
     parsed[keys[index]] = parseField(field, FIELD_SPECS[index]);
   });
 
+  // A syntactically valid expression can still never fire (for example
+  // "0 0 31 2 *" - February never has 31 days). Silently accepting it would
+  // reproduce exactly the silent-skip problem loud-cron exists to report.
+  if (nextOccurrence(parsed, new Date(2000, 0, 1, 0, 0, 0, 0)) === null) {
+    throw new CronParseError(
+      'cron_never_matches',
+      `cron expression "${source}" does not match any real date`,
+    );
+  }
+
   return parsed;
+}
+
+function sorted(values) {
+  return [...values].sort((left, right) => left - right);
+}
+
+function cronDayMatches(parsed, date) {
+  const domMatch = parsed.dayOfMonth.has(date.getDate());
+  const dowMatch = parsed.dayOfWeek.has(date.getDay());
+  if (parsed.dayOfMonthRestricted === true && parsed.dayOfWeekRestricted === true) {
+    return domMatch || dowMatch;
+  }
+  return domMatch && dowMatch;
+}
+
+/**
+ * Does `date` fall on a minute matched by the parsed expression?
+ *
+ * Schedules are evaluated in the host's local time, matching classic cron.
+ */
+export function cronMatchesDate(parsed, date) {
+  if (Number.isNaN(date.getTime())) return false;
+  if (!parsed.minute.has(date.getMinutes())) return false;
+  if (!parsed.hour.has(date.getHours())) return false;
+  if (!parsed.month.has(date.getMonth() + 1)) return false;
+  return cronDayMatches(parsed, date);
+}
+
+/**
+ * First occurrence strictly after `after`, at minute resolution.
+ *
+ * Returns null when no occurrence exists within eight years (a schedule that
+ * can never fire, such as April 31).
+ */
+export function nextOccurrence(parsed, after) {
+  if (!(after instanceof Date) || Number.isNaN(after.getTime())) return null;
+
+  // Occurrences are minute-aligned. Move to the first minute strictly after
+  // `after` so calling nextOccurrence(occurrence) always advances.
+  const start = new Date(after.getTime());
+  start.setSeconds(0, 0);
+  start.setMinutes(start.getMinutes() + 1);
+
+  const hours = sorted(parsed.hour);
+  const minutes = sorted(parsed.minute);
+  let day = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const maxDays = 366 * 8 + 1;
+
+  for (let index = 0; index < maxDays; index += 1) {
+    if (parsed.month.has(day.getMonth() + 1) && cronDayMatches(parsed, day)) {
+      for (const hour of hours) {
+        for (const minute of minutes) {
+          const candidate = new Date(
+            day.getFullYear(),
+            day.getMonth(),
+            day.getDate(),
+            hour,
+            minute,
+            0,
+            0,
+          );
+          if (candidate.getTime() < start.getTime()) continue;
+          // Guard against DST shifting the constructed wall-clock time.
+          if (!cronMatchesDate(parsed, candidate)) continue;
+          return candidate;
+        }
+      }
+    }
+    day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+  }
+
+  return null;
+}
+
+/**
+ * Most recent occurrence at or before `at`.
+ *
+ * Returns null when no occurrence exists in the previous eight years.
+ */
+export function previousOccurrence(parsed, at) {
+  if (!(at instanceof Date) || Number.isNaN(at.getTime())) return null;
+
+  const hours = sorted(parsed.hour);
+  const minutes = sorted(parsed.minute);
+  let day = new Date(at.getFullYear(), at.getMonth(), at.getDate());
+  const maxDays = 366 * 8 + 1;
+
+  for (let index = 0; index < maxDays; index += 1) {
+    const sameDay =
+      day.getFullYear() === at.getFullYear() &&
+      day.getMonth() === at.getMonth() &&
+      day.getDate() === at.getDate();
+
+    if (parsed.month.has(day.getMonth() + 1) && cronDayMatches(parsed, day)) {
+      for (let hIndex = hours.length - 1; hIndex >= 0; hIndex -= 1) {
+        const hour = hours[hIndex];
+        if (sameDay && hour > at.getHours()) continue;
+        for (let mIndex = minutes.length - 1; mIndex >= 0; mIndex -= 1) {
+          const minute = minutes[mIndex];
+          if (sameDay && hour === at.getHours() && minute > at.getMinutes()) {
+            continue;
+          }
+          const candidate = new Date(
+            day.getFullYear(),
+            day.getMonth(),
+            day.getDate(),
+            hour,
+            minute,
+            0,
+            0,
+          );
+          if (candidate.getTime() > at.getTime()) continue;
+          if (!cronMatchesDate(parsed, candidate)) continue;
+          return candidate;
+        }
+      }
+    }
+    day = new Date(day.getFullYear(), day.getMonth(), day.getDate() - 1);
+  }
+
+  return null;
+}
+
+/**
+ * Occurrences in `(afterExclusive, toInclusive]`, oldest first.
+ *
+ * `limit` protects the ledger from an unbounded catch-up after a very long
+ * outage. The next reconcile continues from the newest record written.
+ */
+export function occurrencesBetween(
+  parsed,
+  afterExclusive,
+  toInclusive,
+  { limit = 10000 } = {},
+) {
+  const occurrences = [];
+  if (
+    !(afterExclusive instanceof Date) ||
+    !(toInclusive instanceof Date) ||
+    Number.isNaN(afterExclusive.getTime()) ||
+    Number.isNaN(toInclusive.getTime()) ||
+    toInclusive.getTime() <= afterExclusive.getTime()
+  ) {
+    return occurrences;
+  }
+
+  let cursor = afterExclusive;
+  while (occurrences.length < limit) {
+    const next = nextOccurrence(parsed, cursor);
+    if (next === null || next.getTime() > toInclusive.getTime()) break;
+    occurrences.push(next);
+    cursor = next;
+  }
+  return occurrences;
 }
 
 /**
