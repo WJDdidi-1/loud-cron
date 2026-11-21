@@ -5,8 +5,14 @@
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "loud-cron": "./bin/loud-cron.mjs"
+    "loud-cron": "bin/loud-cron.mjs"
   },
+  "files": [
+    "bin",
+    "src",
+    "docs",
+    "examples"
+  ],
   "scripts": {
     "test": "node --test",
     "check:example": "node ./bin/loud-cron.mjs check ./examples/jobs.json"
