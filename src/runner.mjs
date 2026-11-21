@@ -464,7 +464,10 @@ export async function executeJob({
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       durationMs,
-      exitCode: result.code === undefined ? null : result.code,
+      // A timed-out job did not exit on its own: Windows' taskkill /T /F makes
+      // the shell exit with code 1, while POSIX reports a signal. Record no
+      // exit code either way so the ledger means the same thing everywhere.
+      exitCode: result.timedOut || result.code === undefined ? null : result.code,
       signal: result.signal === undefined ? null : result.signal,
       status,
       pid: result.pid ?? null,
